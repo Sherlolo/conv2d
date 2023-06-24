@@ -1,5 +1,7 @@
 #include <string.h>
 #include <iostream>
+#include <malloc.h>
+#include <stdio.h>
 class Mat
 {
 public:
@@ -33,6 +35,7 @@ public:
         {
             delete refcount;
             delete [] data;
+            //_aligned_free(data);
         }
     }
 
@@ -82,6 +85,7 @@ public:
     void create()
     {
         data = new float[w*h];
+        //data = (float*)_aligned_malloc(w*h*sizeof(float), 32);
         refcount = new int(1);
     }
     void fill(float v)
