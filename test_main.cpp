@@ -58,7 +58,7 @@ int main()
     init_mat(b, X);
 
     test_conv(a, b, conv_3x3);
-    test_conv(a, b, conv_3x3_avx);
+    test_conv(a, b, conv_3x3_img2col);
 
     return 0;
 }

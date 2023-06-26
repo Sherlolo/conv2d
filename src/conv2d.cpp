@@ -85,7 +85,7 @@ Mat conv_3x3_avx(const Mat& input, const Mat& kernel, const int stride)
     }
 
     __m256 kernel_256 = _mm256_load_ps((kernel.data+1));
-    #pragma omp parallel for num_threads(8) //collapse(2)
+    #pragma omp parallel for collapse(2) //num_threads(8) //collapse(2)
     for(int i = 0; i < outh; ++i)
     {
         //_mm_prefetch((const char*)(&input(i*stride+1, 0)), _MM_HINT_T0);
@@ -104,9 +104,9 @@ Mat conv_3x3_avx(const Mat& input, const Mat& kernel, const int stride)
                 sum_256 = _mm256_mul_ps(sum_256, kernel_256);
                 sum_256 = _mm256_hadd_ps(sum_256, sum_256);
                 sum_256 = _mm256_hadd_ps(sum_256, sum_256);
-
-                sum += sum_256.m256_f32[0];            // add res
-                sum += sum_256.m256_f32[4];            // add res
+                sum += _mm256_cvtss_f32(sum_256);
+                //sum += sum_256.m256_f32[0];            // add res
+                //sum += sum_256.m256_f32[4];            // add res
                 sum_arr.m256_f32[k] = sum;
             }
 
@@ -170,29 +170,28 @@ Mat conv_3x3_avx2(const Mat& input, const Mat& kernel, const int stride)
     return output;
 }
 
-Mat conv_3x3_img2col(const Mat& input, const Mat& kernel, const int stride)
+Mat conv_3x3_img2col0(const Mat& input, const Mat& kernel, const int stride)
 {
     int outw = (input.w - kernel.w)/stride + 1; //(inw- kernelw + 2*p)/stride + 1
     int outh = (input.h - kernel.h)/stride + 1;
     int kernel_size = kernel.w*kernel.h;
     Mat output(outw, outh);
 
-    std::vector<int> in_bias(kernel_size);
-    for(int k = 0; k < kernel_size; ++k)
-    {
-        in_bias[k] = k%kernel.w + (k/kernel.w)*input.w;
-    }
+   
     //input2col
-    //Mat in_mat(outw*outh, kernel_size); 
-    Mat in_mat(kernel_size, outw*outh); 
-    for(int i = 0; i < outh; ++i)
+    Mat in_mat(outw*outh, kernel_size); 
+    for(int i = 0; i < kernel.w; ++i)
     {
-        for(int j = 0; j < outw; ++j)
+        for(int j = 0; j < kernel.h; ++j)
         {
-            float* in_data = &input(i*stride, j*stride);
-            for(int k = 0; k < kernel_size; ++k)
+            for(int y = 0; y < outh; ++y)
             {
-                in_mat(i*outw+j, k) = in_data[in_bias[k] ];
+                for(int x = 0; x < outw; ++x)
+                {
+                    int in_x = x*stride+i;
+                    int in_y = y*stride+j;
+                    in_mat(j*kernel.h + i, y*outw + x) = input(in_y, in_x);
+                }
             }
         }
     }
@@ -200,15 +199,74 @@ Mat conv_3x3_img2col(const Mat& input, const Mat& kernel, const int stride)
     //kernel2col
     float* in_kernel = kernel.data;
 
-    //in_mat * kernel
-    for(int i = 0; i < in_mat.h; ++i)
+    //kernel*in_mat
+    for(int i = 0; i < in_mat.w; ++i)
     {
-        for(int j = 0; j < in_mat.w; ++j)
-        {
-            float sum = 0;
-            sum += in_mat(i,j) * in_kernel[j];
-            output.data[i] = sum;
+        float sum = 0;
+        for(int j = 0; j < in_mat.h; ++j)
+        {    
+            sum += in_mat(j,i) * in_kernel[j];
         }
+        output.data[i] = sum;
+    }
+
+    return output;
+}
+
+
+Mat conv_3x3_img2col(const Mat& input, const Mat& kernel, const int stride)
+{
+    int outw = (input.w - kernel.w)/stride + 1; //(inw- kernelw + 2*p)/stride + 1
+    int outh = (input.h - kernel.h)/stride + 1;
+    int kernel_size = kernel.w*kernel.h;
+    Mat output(outw, outh, 0.f);
+
+   
+    //input2col
+    Mat in_mat(outw*outh, kernel_size); 
+    float* in_data = in_mat.data;
+    for(int j = 0; j < kernel.h; ++j)
+    {
+        for(int i = 0; i < kernel.w; ++i)
+        {
+            for(int y = 0; y < outh; ++y)
+            {
+                for(int x = 0; x < outw; x+=8)
+                {
+                    //if stide==1 outw%8==0
+                    __m256 tmp = _mm256_loadu_ps(&input(y*stride+j, x*stride+i));
+                    _mm256_store_ps(in_data, tmp);
+                    in_data += 8;
+                }
+            }
+        }
+    }
+
+    //kernel2col
+    float* in_kernel = kernel.data;
+
+    //kernel*in_mat
+    // for(int i = 0; i < in_mat.w; ++i)
+    // {
+    //     float sum = 0;
+    //     for(int j = 0; j < in_mat.h; ++j)
+    //     {    
+    //         sum += in_mat(j,i) * in_kernel[j];
+    //     }
+    //     output.data[i] = sum;
+    // }
+
+    for(int j = 0; j < in_mat.w; j+=8)
+    {   
+        __m256 sum = _mm256_setzero_ps();
+        for(int i = 0; i < in_mat.h; i++)
+        {    
+            __m256 kernel_i = _mm256_set1_ps(in_kernel[i]);
+            __m256 tmp = _mm256_loadu_ps(&in_mat(i, j));
+
+            sum = _mm256_fmadd_ps(tmp, kernel_i, sum);
+        }
+        _mm256_storeu_ps(&output.data[j], sum);
     }
 
     return output;
